@@ -114,6 +114,51 @@ const readTools = [
     },
   },
   {
+    name: 'get_product_targets',
+    description:
+      'Get all product targets (ASIN targeting) for a campaign with their current bids and states.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        campaign_id: {
+          type: 'string',
+          description: 'The campaign ID to get product targets for',
+        },
+      },
+      required: ['campaign_id'],
+    },
+  },
+  {
+    name: 'get_category_targets',
+    description:
+      'Get all category targets for a campaign with their current bids and states.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        campaign_id: {
+          type: 'string',
+          description: 'The campaign ID to get category targets for',
+        },
+      },
+      required: ['campaign_id'],
+    },
+  },
+  {
+    name: 'get_all_targets',
+    description:
+      'Get all targets (product and category) for a campaign. Returns both ASIN targets and category targets with their bids and states.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        campaign_id: {
+          type: 'string',
+          description: 'The campaign ID to get targets for',
+        },
+      },
+      required: ['campaign_id'],
+    },
+  },
+  {
     name: 'get_campaign_metrics',
     description:
       'Get performance metrics for a specific campaign over a date range. Returns impressions, clicks, spend, sales, orders, and units sold.',
@@ -330,6 +375,63 @@ const writeTools = [
     },
   },
   {
+    name: 'propose_target_bid_change',
+    description:
+      'Propose a product or category target bid adjustment. Creates a pending change for approval. Use this when a target needs a bid increase (for more impressions) or decrease (for better ACOS).',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        target_id: {
+          type: 'string',
+          description: 'The target ID to adjust (product or category target)',
+        },
+        target_type: {
+          type: 'string',
+          enum: ['product_target', 'category_target'],
+          description: 'The type of target',
+        },
+        new_bid: {
+          type: 'number',
+          description: 'The new bid amount in dollars (e.g., 0.85)',
+        },
+        reason: {
+          type: 'string',
+          description: 'Explanation for why this change is recommended',
+        },
+      },
+      required: ['target_id', 'target_type', 'new_bid', 'reason'],
+    },
+  },
+  {
+    name: 'propose_target_state_change',
+    description:
+      'Propose to pause or enable a product or category target. Creates a pending change for approval.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        target_id: {
+          type: 'string',
+          description: 'The target ID to modify',
+        },
+        target_type: {
+          type: 'string',
+          enum: ['product_target', 'category_target'],
+          description: 'The type of target',
+        },
+        new_state: {
+          type: 'string',
+          enum: ['enabled', 'paused'],
+          description: 'The desired state',
+        },
+        reason: {
+          type: 'string',
+          description: 'Explanation for why this change is recommended',
+        },
+      },
+      required: ['target_id', 'target_type', 'new_state', 'reason'],
+    },
+  },
+  {
     name: 'list_pending_changes',
     description:
       'List all pending changes awaiting approval. Shows proposed modifications to bids, states, and budgets.',
@@ -441,6 +543,101 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         return {
           content: [
             { type: 'text' as const, text: `Found ${keywords.length} keyword(s):\n\n${output}` },
+          ],
+        };
+      }
+
+      case 'get_product_targets': {
+        const campaignId = args?.campaign_id as string;
+        const targets = await db.getProductTargetsByCampaign(campaignId);
+
+        if (targets.length === 0) {
+          return {
+            content: [
+              { type: 'text' as const, text: `No product targets found for campaign ${campaignId}` },
+            ],
+          };
+        }
+
+        const output = targets
+          .map(
+            (t) =>
+              `• ${t.targetType}: "${t.expressionValue}"\n  ID: ${t.id} | State: ${t.state} | Bid: ${formatCurrency(t.bid)}`
+          )
+          .join('\n\n');
+
+        return {
+          content: [
+            { type: 'text' as const, text: `Found ${targets.length} product target(s):\n\n${output}` },
+          ],
+        };
+      }
+
+      case 'get_category_targets': {
+        const campaignId = args?.campaign_id as string;
+        const targets = await db.getCategoryTargetsByCampaign(campaignId);
+
+        if (targets.length === 0) {
+          return {
+            content: [
+              { type: 'text' as const, text: `No category targets found for campaign ${campaignId}` },
+            ],
+          };
+        }
+
+        const output = targets
+          .map(
+            (t) =>
+              `• Category: ${t.categoryName || t.categoryId}\n  ID: ${t.id} | State: ${t.state} | Bid: ${formatCurrency(t.bid)}${t.refinements ? `\n  Refinements: ${JSON.stringify(t.refinements)}` : ''}`
+          )
+          .join('\n\n');
+
+        return {
+          content: [
+            { type: 'text' as const, text: `Found ${targets.length} category target(s):\n\n${output}` },
+          ],
+        };
+      }
+
+      case 'get_all_targets': {
+        const campaignId = args?.campaign_id as string;
+        const productTargets = await db.getProductTargetsByCampaign(campaignId);
+        const categoryTargets = await db.getCategoryTargetsByCampaign(campaignId);
+
+        if (productTargets.length === 0 && categoryTargets.length === 0) {
+          return {
+            content: [
+              { type: 'text' as const, text: `No targets found for campaign ${campaignId}` },
+            ],
+          };
+        }
+
+        let output = '';
+
+        if (productTargets.length > 0) {
+          output += `📦 Product Targets (${productTargets.length}):\n\n`;
+          output += productTargets
+            .map(
+              (t) =>
+                `• ${t.targetType}: "${t.expressionValue}"\n  ID: ${t.id} | State: ${t.state} | Bid: ${formatCurrency(t.bid)}`
+            )
+            .join('\n\n');
+        }
+
+        if (categoryTargets.length > 0) {
+          if (output) output += '\n\n';
+          output += `📁 Category Targets (${categoryTargets.length}):\n\n`;
+          output += categoryTargets
+            .map(
+              (t) =>
+                `• ${t.categoryName || t.categoryId}\n  ID: ${t.id} | State: ${t.state} | Bid: ${formatCurrency(t.bid)}`
+            )
+            .join('\n\n');
+        }
+
+        return {
+          content: [
+            { type: 'text' as const, text: output },
           ],
         };
       }
@@ -779,6 +976,109 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         };
       }
 
+      case 'propose_target_bid_change': {
+        const targetId = args?.target_id as string;
+        const targetType = args?.target_type as 'product_target' | 'category_target';
+        const newBid = args?.new_bid as number;
+        const reason = args?.reason as string;
+
+        let target;
+        let targetName: string;
+
+        if (targetType === 'product_target') {
+          target = await db.getProductTargetById(targetId);
+          targetName = target ? `${target.targetType}: ${target.expressionValue}` : targetId;
+        } else {
+          target = await db.getCategoryTargetById(targetId);
+          targetName = target ? (target.categoryName || target.categoryId) : targetId;
+        }
+
+        if (!target) {
+          return {
+            content: [{ type: 'text' as const, text: `Target ${targetId} not found.` }],
+            isError: true,
+          };
+        }
+
+        const changeId = await db.createPendingChange({
+          changeType: 'bid_adjustment',
+          targetType,
+          targetId,
+          targetName,
+          currentValue: { bid: target.bid },
+          proposedValue: { bid: newBid },
+          reason,
+        });
+
+        return {
+          content: [
+            {
+              type: 'text' as const,
+              text:
+                `✅ Proposed bid change created (ID: ${changeId})\n\n` +
+                `Target: ${targetName}\n` +
+                `Type: ${targetType}\n` +
+                `Current bid: ${formatCurrency(target.bid)}\n` +
+                `Proposed bid: ${formatCurrency(newBid)}\n` +
+                `Change: ${newBid > target.bid ? '+' : ''}${formatCurrency(newBid - target.bid)} (${((newBid - target.bid) / target.bid * 100).toFixed(1)}%)\n` +
+                `Reason: ${reason}\n\n` +
+                `Use approve_change with ID ${changeId} to execute, or reject_change to cancel.`,
+            },
+          ],
+        };
+      }
+
+      case 'propose_target_state_change': {
+        const targetId = args?.target_id as string;
+        const targetType = args?.target_type as 'product_target' | 'category_target';
+        const newState = args?.new_state as 'enabled' | 'paused';
+        const reason = args?.reason as string;
+
+        let target;
+        let targetName: string;
+
+        if (targetType === 'product_target') {
+          target = await db.getProductTargetById(targetId);
+          targetName = target ? `${target.targetType}: ${target.expressionValue}` : targetId;
+        } else {
+          target = await db.getCategoryTargetById(targetId);
+          targetName = target ? (target.categoryName || target.categoryId) : targetId;
+        }
+
+        if (!target) {
+          return {
+            content: [{ type: 'text' as const, text: `Target ${targetId} not found.` }],
+            isError: true,
+          };
+        }
+
+        const changeId = await db.createPendingChange({
+          changeType: 'state_change',
+          targetType,
+          targetId,
+          targetName,
+          currentValue: { state: target.state },
+          proposedValue: { state: newState },
+          reason,
+        });
+
+        return {
+          content: [
+            {
+              type: 'text' as const,
+              text:
+                `✅ Proposed state change created (ID: ${changeId})\n\n` +
+                `Target: ${targetName}\n` +
+                `Type: ${targetType}\n` +
+                `Current state: ${target.state}\n` +
+                `Proposed state: ${newState}\n` +
+                `Reason: ${reason}\n\n` +
+                `Use approve_change with ID ${changeId} to execute, or reject_change to cancel.`,
+            },
+          ],
+        };
+      }
+
       case 'list_pending_changes': {
         const status = (args?.status as PendingChange['status']) || 'pending';
         const changes = await db.getPendingChanges(status);
@@ -870,12 +1170,22 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           switch (change.changeType) {
             case 'bid_adjustment': {
               const newBid = (change.proposedValue as { bid: number }).bid;
-              await adsClient.updateKeywordBid(change.targetId, newBid);
+              // Handle both keyword and target bid changes
+              if (change.targetType === 'product_target' || change.targetType === 'category_target') {
+                await adsClient.updateTargetBid(change.targetId, newBid);
+              } else {
+                await adsClient.updateKeywordBid(change.targetId, newBid);
+              }
               break;
             }
             case 'state_change': {
               const newState = (change.proposedValue as { state: 'enabled' | 'paused' }).state;
-              await adsClient.updateKeywordState(change.targetId, newState);
+              // Handle both keyword and target state changes
+              if (change.targetType === 'product_target' || change.targetType === 'category_target') {
+                await adsClient.updateTargetState(change.targetId, newState);
+              } else {
+                await adsClient.updateKeywordState(change.targetId, newState);
+              }
               break;
             }
             case 'budget_change': {

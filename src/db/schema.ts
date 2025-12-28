@@ -65,6 +65,34 @@ CREATE TABLE IF NOT EXISTS product_ads (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- Product targets table (ASIN targeting)
+CREATE TABLE IF NOT EXISTS product_targets (
+  id TEXT PRIMARY KEY,
+  ad_group_id TEXT NOT NULL REFERENCES ad_groups(id) ON DELETE CASCADE,
+  campaign_id TEXT NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
+  target_type TEXT NOT NULL CHECK (target_type IN ('asinSameAs', 'asinExpandedFrom', 'asinCategorySameAs', 'asinBrandSameAs', 'asinPriceLessThan', 'asinPriceBetween', 'asinPriceGreaterThan', 'asinReviewRatingLessThan', 'asinReviewRatingBetween', 'asinReviewRatingGreaterThan')),
+  expression_value TEXT NOT NULL,
+  resolved_expression JSONB,
+  state TEXT NOT NULL CHECK (state IN ('enabled', 'paused', 'archived')),
+  bid DECIMAL(10, 4) NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Category targets table
+CREATE TABLE IF NOT EXISTS category_targets (
+  id TEXT PRIMARY KEY,
+  ad_group_id TEXT NOT NULL REFERENCES ad_groups(id) ON DELETE CASCADE,
+  campaign_id TEXT NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
+  category_id TEXT NOT NULL,
+  category_name TEXT,
+  state TEXT NOT NULL CHECK (state IN ('enabled', 'paused', 'archived')),
+  bid DECIMAL(10, 4) NOT NULL,
+  refinements JSONB,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 -- Campaign daily metrics
 CREATE TABLE IF NOT EXISTS campaign_metrics (
   id SERIAL PRIMARY KEY,
@@ -98,6 +126,38 @@ CREATE TABLE IF NOT EXISTS keyword_metrics (
   UNIQUE(keyword_id, date)
 );
 
+-- Product target daily metrics
+CREATE TABLE IF NOT EXISTS product_target_metrics (
+  id SERIAL PRIMARY KEY,
+  target_id TEXT NOT NULL REFERENCES product_targets(id) ON DELETE CASCADE,
+  campaign_id TEXT NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
+  date DATE NOT NULL,
+  impressions INTEGER NOT NULL DEFAULT 0,
+  clicks INTEGER NOT NULL DEFAULT 0,
+  spend DECIMAL(10, 2) NOT NULL DEFAULT 0,
+  sales DECIMAL(10, 2) NOT NULL DEFAULT 0,
+  orders INTEGER NOT NULL DEFAULT 0,
+  units_sold INTEGER NOT NULL DEFAULT 0,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE(target_id, date)
+);
+
+-- Category target daily metrics
+CREATE TABLE IF NOT EXISTS category_target_metrics (
+  id SERIAL PRIMARY KEY,
+  target_id TEXT NOT NULL REFERENCES category_targets(id) ON DELETE CASCADE,
+  campaign_id TEXT NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
+  date DATE NOT NULL,
+  impressions INTEGER NOT NULL DEFAULT 0,
+  clicks INTEGER NOT NULL DEFAULT 0,
+  spend DECIMAL(10, 2) NOT NULL DEFAULT 0,
+  sales DECIMAL(10, 2) NOT NULL DEFAULT 0,
+  orders INTEGER NOT NULL DEFAULT 0,
+  units_sold INTEGER NOT NULL DEFAULT 0,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE(target_id, date)
+);
+
 -- Book configuration for royalty calculations
 CREATE TABLE IF NOT EXISTS books (
   id SERIAL PRIMARY KEY,
@@ -114,7 +174,7 @@ CREATE TABLE IF NOT EXISTS books (
 CREATE TABLE IF NOT EXISTS pending_changes (
   id SERIAL PRIMARY KEY,
   change_type TEXT NOT NULL CHECK (change_type IN ('bid_adjustment', 'state_change', 'budget_change', 'add_negative_keyword')),
-  target_type TEXT NOT NULL CHECK (target_type IN ('campaign', 'ad_group', 'keyword')),
+  target_type TEXT NOT NULL CHECK (target_type IN ('campaign', 'ad_group', 'keyword', 'product_target', 'category_target')),
   target_id TEXT NOT NULL,
   target_name TEXT,
   current_value JSONB NOT NULL,
@@ -161,5 +221,13 @@ CREATE INDEX IF NOT EXISTS idx_keywords_campaign ON keywords(campaign_id);
 CREATE INDEX IF NOT EXISTS idx_ad_groups_campaign ON ad_groups(campaign_id);
 CREATE INDEX IF NOT EXISTS idx_pending_changes_status ON pending_changes(status);
 CREATE INDEX IF NOT EXISTS idx_pending_changes_created ON pending_changes(created_at);
+CREATE INDEX IF NOT EXISTS idx_product_targets_campaign ON product_targets(campaign_id);
+CREATE INDEX IF NOT EXISTS idx_product_targets_ad_group ON product_targets(ad_group_id);
+CREATE INDEX IF NOT EXISTS idx_category_targets_campaign ON category_targets(campaign_id);
+CREATE INDEX IF NOT EXISTS idx_category_targets_ad_group ON category_targets(ad_group_id);
+CREATE INDEX IF NOT EXISTS idx_product_target_metrics_date ON product_target_metrics(date);
+CREATE INDEX IF NOT EXISTS idx_product_target_metrics_target ON product_target_metrics(target_id);
+CREATE INDEX IF NOT EXISTS idx_category_target_metrics_date ON category_target_metrics(date);
+CREATE INDEX IF NOT EXISTS idx_category_target_metrics_target ON category_target_metrics(target_id);
 `;
 

@@ -50,6 +50,60 @@ export interface ProductAd {
 }
 
 /**
+ * Product targeting types supported by Amazon Advertising API
+ */
+export type ProductTargetType =
+  | 'asinSameAs'           // Target specific ASIN
+  | 'asinExpandedFrom'     // Expanded targeting from an ASIN
+  | 'asinCategorySameAs'   // Target ASINs in same category
+  | 'asinBrandSameAs'      // Target ASINs of same brand
+  | 'asinPriceLessThan'    // Target ASINs below price
+  | 'asinPriceBetween'     // Target ASINs in price range
+  | 'asinPriceGreaterThan' // Target ASINs above price
+  | 'asinReviewRatingLessThan'    // Target by review rating
+  | 'asinReviewRatingBetween'     // Target by review rating range
+  | 'asinReviewRatingGreaterThan'; // Target by review rating
+
+/**
+ * Product target (ASIN targeting)
+ */
+export interface ProductTarget {
+  id: string;
+  adGroupId: string;
+  campaignId: string;
+  targetType: ProductTargetType;
+  expressionValue: string;  // The ASIN or value being targeted
+  resolvedExpression?: {    // Full targeting expression from API
+    type: string;
+    value: string;
+  }[];
+  state: 'enabled' | 'paused' | 'archived';
+  bid: number;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+/**
+ * Category target
+ */
+export interface CategoryTarget {
+  id: string;
+  adGroupId: string;
+  campaignId: string;
+  categoryId: string;
+  categoryName?: string;
+  state: 'enabled' | 'paused' | 'archived';
+  bid: number;
+  refinements?: {
+    brands?: string[];
+    priceRange?: { min?: number; max?: number };
+    reviewRating?: { min?: number; max?: number };
+  };
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+/**
  * Metrics from Amazon Advertising reports
  */
 export interface CampaignMetrics {
@@ -68,6 +122,30 @@ export interface CampaignMetrics {
 
 export interface KeywordMetrics {
   keywordId: string;
+  campaignId: string;
+  date: string;
+  impressions: number;
+  clicks: number;
+  spend: number;
+  sales: number;
+  orders: number;
+  unitsSold: number;
+}
+
+export interface ProductTargetMetrics {
+  targetId: string;
+  campaignId: string;
+  date: string;
+  impressions: number;
+  clicks: number;
+  spend: number;
+  sales: number;
+  orders: number;
+  unitsSold: number;
+}
+
+export interface CategoryTargetMetrics {
+  targetId: string;
   campaignId: string;
   date: string;
   impressions: number;

@@ -100,14 +100,16 @@ async function syncAdGroups(client: AmazonAdsClient): Promise<number> {
   let totalAdGroups = 0;
 
   for (const campaign of campaigns) {
+    // Skip demo campaigns
+    if (isDemoCampaignId(campaign.id)) continue;
+
     try {
       const adGroups = await client.getAdGroups(campaign.id);
       console.log(`  Campaign "${campaign.name}": ${adGroups.length} ad groups`);
 
       for (const adGroup of adGroups) {
-        // We'd need to add upsertAdGroup to the database layer
-        // For now, just count
-        totalAdGroups += adGroups.length;
+        await db.upsertAdGroup(adGroup);
+        totalAdGroups++;
       }
     } catch (error) {
       console.error(`  Error syncing ad groups for campaign ${campaign.id}:`, error);
@@ -155,6 +157,42 @@ async function syncKeywords(client: AmazonAdsClient): Promise<number> {
 }
 
 /**
+ * Sync product and category targets for all campaigns
+ */
+async function syncTargets(client: AmazonAdsClient): Promise<{ productTargets: number; categoryTargets: number }> {
+  console.log('Syncing product and category targets...');
+
+  const campaigns = await db.getCampaigns('enabled');
+  let totalProductTargets = 0;
+  let totalCategoryTargets = 0;
+
+  for (const campaign of campaigns) {
+    // Skip demo campaigns and auto-targeting campaigns (they use different targeting)
+    if (isDemoCampaignId(campaign.id)) continue;
+    if (campaign.targetingType !== 'manual') continue;
+
+    try {
+      const { productTargets, categoryTargets } = await client.getTargets(campaign.id);
+      console.log(`  Campaign "${campaign.name}": ${productTargets.length} product targets, ${categoryTargets.length} category targets`);
+
+      for (const target of productTargets) {
+        await db.upsertProductTarget(target);
+        totalProductTargets++;
+      }
+
+      for (const target of categoryTargets) {
+        await db.upsertCategoryTarget(target);
+        totalCategoryTargets++;
+      }
+    } catch (error) {
+      console.error(`  Error syncing targets for campaign ${campaign.id}:`, error);
+    }
+  }
+
+  return { productTargets: totalProductTargets, categoryTargets: totalCategoryTargets };
+}
+
+/**
  * Sync performance metrics
  */
 async function syncMetrics(client: AmazonAdsClient): Promise<number> {
@@ -195,12 +233,18 @@ async function runSync(): Promise<void> {
     // Run migrations on startup
     await db.migrate();
 
-    // Sync in order: campaigns -> keywords -> metrics
+    // Sync in order: campaigns -> ad groups -> keywords -> targets -> metrics
     const campaignCount = await syncCampaigns(adsClient!);
     totalRecords += campaignCount;
 
+    const adGroupCount = await syncAdGroups(adsClient!);
+    totalRecords += adGroupCount;
+
     const keywordCount = await syncKeywords(adsClient!);
     totalRecords += keywordCount;
+
+    const { productTargets, categoryTargets } = await syncTargets(adsClient!);
+    totalRecords += productTargets + categoryTargets;
 
     const metricsCount = await syncMetrics(adsClient!);
     totalRecords += metricsCount;
@@ -208,6 +252,12 @@ async function runSync(): Promise<void> {
     console.log('');
     console.log('Sync completed successfully!');
     console.log(`  Total records synced: ${totalRecords}`);
+    console.log(`    - Campaigns: ${campaignCount}`);
+    console.log(`    - Ad groups: ${adGroupCount}`);
+    console.log(`    - Keywords: ${keywordCount}`);
+    console.log(`    - Product targets: ${productTargets}`);
+    console.log(`    - Category targets: ${categoryTargets}`);
+    console.log(`    - Metrics: ${metricsCount}`);
   } catch (error) {
     success = false;
     errorMessage = error instanceof Error ? error.message : 'Unknown error';

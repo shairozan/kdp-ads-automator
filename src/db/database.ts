@@ -2,8 +2,13 @@ import pg from 'pg';
 import { SCHEMA } from './schema.js';
 import type {
   Campaign,
+  AdGroup,
   Keyword,
+  ProductTarget,
+  CategoryTarget,
   CampaignMetrics,
+  ProductTargetMetrics,
+  CategoryTargetMetrics,
   BookConfig,
 } from '../types/index.js';
 
@@ -12,7 +17,7 @@ const { Pool } = pg;
 export interface PendingChange {
   id: number;
   changeType: 'bid_adjustment' | 'state_change' | 'budget_change' | 'add_negative_keyword';
-  targetType: 'campaign' | 'ad_group' | 'keyword';
+  targetType: 'campaign' | 'ad_group' | 'keyword' | 'product_target' | 'category_target';
   targetId: string;
   targetName: string | null;
   currentValue: Record<string, unknown>;
@@ -119,6 +124,49 @@ export class KdpDatabase {
       createdAt: new Date(row.created_at),
       updatedAt: new Date(row.updated_at),
     };
+  }
+
+  // ============================================
+  // Ad Group Operations
+  // ============================================
+
+  async upsertAdGroup(adGroup: AdGroup): Promise<void> {
+    await this.pool.query(
+      `
+      INSERT INTO ad_groups (id, campaign_id, name, state, default_bid, updated_at)
+      VALUES ($1, $2, $3, $4, $5, NOW())
+      ON CONFLICT(id) DO UPDATE SET
+        campaign_id = $2,
+        name = $3,
+        state = $4,
+        default_bid = $5,
+        updated_at = NOW()
+    `,
+      [
+        adGroup.id,
+        adGroup.campaignId,
+        adGroup.name,
+        adGroup.state,
+        adGroup.defaultBid,
+      ]
+    );
+  }
+
+  async getAdGroupsByCampaign(campaignId: string): Promise<AdGroup[]> {
+    const result = await this.pool.query(
+      'SELECT * FROM ad_groups WHERE campaign_id = $1 ORDER BY name',
+      [campaignId]
+    );
+
+    return result.rows.map((row) => ({
+      id: row.id,
+      campaignId: row.campaign_id,
+      name: row.name,
+      state: row.state as AdGroup['state'],
+      defaultBid: parseFloat(row.default_bid),
+      createdAt: new Date(row.created_at),
+      updatedAt: new Date(row.updated_at),
+    }));
   }
 
   // ============================================
@@ -372,6 +420,270 @@ export class KdpDatabase {
       createdAt: new Date(row.created_at),
       updatedAt: new Date(row.updated_at),
     };
+  }
+
+  // ============================================
+  // Product Targets
+  // ============================================
+
+  async upsertProductTarget(target: ProductTarget): Promise<void> {
+    await this.pool.query(
+      `
+      INSERT INTO product_targets (id, ad_group_id, campaign_id, target_type, expression_value, resolved_expression, state, bid, updated_at)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
+      ON CONFLICT(id) DO UPDATE SET
+        ad_group_id = $2,
+        campaign_id = $3,
+        target_type = $4,
+        expression_value = $5,
+        resolved_expression = $6,
+        state = $7,
+        bid = $8,
+        updated_at = NOW()
+    `,
+      [
+        target.id,
+        target.adGroupId,
+        target.campaignId,
+        target.targetType,
+        target.expressionValue,
+        target.resolvedExpression ? JSON.stringify(target.resolvedExpression) : null,
+        target.state,
+        target.bid,
+      ]
+    );
+  }
+
+  async getProductTargetsByCampaign(campaignId: string): Promise<ProductTarget[]> {
+    const result = await this.pool.query(
+      'SELECT * FROM product_targets WHERE campaign_id = $1 ORDER BY expression_value',
+      [campaignId]
+    );
+
+    return result.rows.map((row) => ({
+      id: row.id,
+      adGroupId: row.ad_group_id,
+      campaignId: row.campaign_id,
+      targetType: row.target_type as ProductTarget['targetType'],
+      expressionValue: row.expression_value,
+      resolvedExpression: row.resolved_expression,
+      state: row.state as ProductTarget['state'],
+      bid: parseFloat(row.bid),
+      createdAt: new Date(row.created_at),
+      updatedAt: new Date(row.updated_at),
+    }));
+  }
+
+  async getProductTargetById(id: string): Promise<ProductTarget | null> {
+    const result = await this.pool.query('SELECT * FROM product_targets WHERE id = $1', [id]);
+
+    if (result.rows.length === 0) return null;
+
+    const row = result.rows[0];
+    return {
+      id: row.id,
+      adGroupId: row.ad_group_id,
+      campaignId: row.campaign_id,
+      targetType: row.target_type as ProductTarget['targetType'],
+      expressionValue: row.expression_value,
+      resolvedExpression: row.resolved_expression,
+      state: row.state as ProductTarget['state'],
+      bid: parseFloat(row.bid),
+      createdAt: new Date(row.created_at),
+      updatedAt: new Date(row.updated_at),
+    };
+  }
+
+  // ============================================
+  // Category Targets
+  // ============================================
+
+  async upsertCategoryTarget(target: CategoryTarget): Promise<void> {
+    await this.pool.query(
+      `
+      INSERT INTO category_targets (id, ad_group_id, campaign_id, category_id, category_name, state, bid, refinements, updated_at)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
+      ON CONFLICT(id) DO UPDATE SET
+        ad_group_id = $2,
+        campaign_id = $3,
+        category_id = $4,
+        category_name = $5,
+        state = $6,
+        bid = $7,
+        refinements = $8,
+        updated_at = NOW()
+    `,
+      [
+        target.id,
+        target.adGroupId,
+        target.campaignId,
+        target.categoryId,
+        target.categoryName ?? null,
+        target.state,
+        target.bid,
+        target.refinements ? JSON.stringify(target.refinements) : null,
+      ]
+    );
+  }
+
+  async getCategoryTargetsByCampaign(campaignId: string): Promise<CategoryTarget[]> {
+    const result = await this.pool.query(
+      'SELECT * FROM category_targets WHERE campaign_id = $1 ORDER BY category_name, category_id',
+      [campaignId]
+    );
+
+    return result.rows.map((row) => ({
+      id: row.id,
+      adGroupId: row.ad_group_id,
+      campaignId: row.campaign_id,
+      categoryId: row.category_id,
+      categoryName: row.category_name ?? undefined,
+      state: row.state as CategoryTarget['state'],
+      bid: parseFloat(row.bid),
+      refinements: row.refinements ?? undefined,
+      createdAt: new Date(row.created_at),
+      updatedAt: new Date(row.updated_at),
+    }));
+  }
+
+  async getCategoryTargetById(id: string): Promise<CategoryTarget | null> {
+    const result = await this.pool.query('SELECT * FROM category_targets WHERE id = $1', [id]);
+
+    if (result.rows.length === 0) return null;
+
+    const row = result.rows[0];
+    return {
+      id: row.id,
+      adGroupId: row.ad_group_id,
+      campaignId: row.campaign_id,
+      categoryId: row.category_id,
+      categoryName: row.category_name ?? undefined,
+      state: row.state as CategoryTarget['state'],
+      bid: parseFloat(row.bid),
+      refinements: row.refinements ?? undefined,
+      createdAt: new Date(row.created_at),
+      updatedAt: new Date(row.updated_at),
+    };
+  }
+
+  // ============================================
+  // Product Target Metrics
+  // ============================================
+
+  async upsertProductTargetMetrics(metrics: ProductTargetMetrics): Promise<void> {
+    await this.pool.query(
+      `
+      INSERT INTO product_target_metrics (target_id, campaign_id, date, impressions, clicks, spend, sales, orders, units_sold)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+      ON CONFLICT(target_id, date) DO UPDATE SET
+        impressions = $4,
+        clicks = $5,
+        spend = $6,
+        sales = $7,
+        orders = $8,
+        units_sold = $9
+    `,
+      [
+        metrics.targetId,
+        metrics.campaignId,
+        metrics.date,
+        metrics.impressions,
+        metrics.clicks,
+        metrics.spend,
+        metrics.sales,
+        metrics.orders,
+        metrics.unitsSold,
+      ]
+    );
+  }
+
+  async getProductTargetMetrics(
+    targetId: string,
+    startDate: string,
+    endDate: string
+  ): Promise<ProductTargetMetrics[]> {
+    const result = await this.pool.query(
+      `
+      SELECT * FROM product_target_metrics
+      WHERE target_id = $1
+        AND date >= $2
+        AND date <= $3
+      ORDER BY date
+    `,
+      [targetId, startDate, endDate]
+    );
+
+    return result.rows.map((row) => ({
+      targetId: row.target_id,
+      campaignId: row.campaign_id,
+      date: row.date instanceof Date ? row.date.toISOString().split('T')[0] : row.date,
+      impressions: row.impressions,
+      clicks: row.clicks,
+      spend: parseFloat(row.spend),
+      sales: parseFloat(row.sales),
+      orders: row.orders,
+      unitsSold: row.units_sold,
+    }));
+  }
+
+  // ============================================
+  // Category Target Metrics
+  // ============================================
+
+  async upsertCategoryTargetMetrics(metrics: CategoryTargetMetrics): Promise<void> {
+    await this.pool.query(
+      `
+      INSERT INTO category_target_metrics (target_id, campaign_id, date, impressions, clicks, spend, sales, orders, units_sold)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+      ON CONFLICT(target_id, date) DO UPDATE SET
+        impressions = $4,
+        clicks = $5,
+        spend = $6,
+        sales = $7,
+        orders = $8,
+        units_sold = $9
+    `,
+      [
+        metrics.targetId,
+        metrics.campaignId,
+        metrics.date,
+        metrics.impressions,
+        metrics.clicks,
+        metrics.spend,
+        metrics.sales,
+        metrics.orders,
+        metrics.unitsSold,
+      ]
+    );
+  }
+
+  async getCategoryTargetMetrics(
+    targetId: string,
+    startDate: string,
+    endDate: string
+  ): Promise<CategoryTargetMetrics[]> {
+    const result = await this.pool.query(
+      `
+      SELECT * FROM category_target_metrics
+      WHERE target_id = $1
+        AND date >= $2
+        AND date <= $3
+      ORDER BY date
+    `,
+      [targetId, startDate, endDate]
+    );
+
+    return result.rows.map((row) => ({
+      targetId: row.target_id,
+      campaignId: row.campaign_id,
+      date: row.date instanceof Date ? row.date.toISOString().split('T')[0] : row.date,
+      impressions: row.impressions,
+      clicks: row.clicks,
+      spend: parseFloat(row.spend),
+      sales: parseFloat(row.sales),
+      orders: row.orders,
+      unitsSold: row.units_sold,
+    }));
   }
 
   // ============================================

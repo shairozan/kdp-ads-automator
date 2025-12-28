@@ -19,8 +19,11 @@ import type {
   Campaign,
   AdGroup,
   Keyword,
+  ProductTarget,
+  CategoryTarget,
   CampaignMetrics,
   AmazonApiError,
+  ProductTargetType,
 } from '../types/index.js';
 
 const API_BASE = 'https://advertising-api.amazon.com';
@@ -32,6 +35,7 @@ const CONTENT_TYPES = {
   adGroup: 'application/vnd.spAdGroup.v3+json',
   keyword: 'application/vnd.spKeyword.v3+json',
   negativeKeyword: 'application/vnd.spNegativeKeyword.v3+json',
+  targeting: 'application/vnd.spTargetingClause.v3+json',
   report: 'application/vnd.createasyncreportrequest.v3+json',
 };
 
@@ -76,6 +80,23 @@ interface AmazonKeywordResponseV3 {
   matchType: string;
   state: string;
   bid: number;
+}
+
+interface AmazonTargetingClauseResponseV3 {
+  targetId: string;
+  adGroupId: string;
+  campaignId: string;
+  state: string;
+  bid: number;
+  expression: Array<{
+    type: string;
+    value?: string;
+  }>;
+  resolvedExpression?: Array<{
+    type: string;
+    value?: string;
+  }>;
+  expressionType: 'auto' | 'manual';
 }
 
 // v3 Report types
@@ -278,6 +299,170 @@ export class AmazonAdsClient {
       createdAt: new Date(),
       updatedAt: new Date(),
     }));
+  }
+
+  /**
+   * Get product and category targets for a campaign
+   * Returns both product targets (ASIN targeting) and category targets
+   */
+  async getTargets(campaignId: string): Promise<{
+    productTargets: ProductTarget[];
+    categoryTargets: CategoryTarget[];
+  }> {
+    const response = await this.request<{ targetingClauses: AmazonTargetingClauseResponseV3[] }>(
+      '/sp/targets/list',
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          campaignIdFilter: { include: [campaignId] },
+          maxResults: 100,
+        }),
+      },
+      CONTENT_TYPES.targeting
+    );
+
+    const productTargets: ProductTarget[] = [];
+    const categoryTargets: CategoryTarget[] = [];
+
+    for (const target of response.targetingClauses) {
+      const expression = target.expression[0];
+      if (!expression) continue;
+
+      const expressionType = expression.type.toLowerCase();
+
+      // Category targeting uses 'asinCategorySameAs' type
+      if (expressionType === 'asincategorysameas') {
+        categoryTargets.push({
+          id: target.targetId,
+          adGroupId: target.adGroupId,
+          campaignId: target.campaignId,
+          categoryId: expression.value || '',
+          categoryName: undefined, // Would need separate API call to get name
+          state: target.state.toLowerCase() as CategoryTarget['state'],
+          bid: target.bid,
+          refinements: this.parseRefinements(target.expression),
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        });
+      } else {
+        // All other targeting types are product targets
+        productTargets.push({
+          id: target.targetId,
+          adGroupId: target.adGroupId,
+          campaignId: target.campaignId,
+          targetType: this.mapTargetType(expressionType),
+          expressionValue: expression.value || '',
+          resolvedExpression: target.resolvedExpression?.map(e => ({
+            type: e.type,
+            value: e.value || '',
+          })),
+          state: target.state.toLowerCase() as ProductTarget['state'],
+          bid: target.bid,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        });
+      }
+    }
+
+    return { productTargets, categoryTargets };
+  }
+
+  /**
+   * Map Amazon API target type to our ProductTargetType
+   */
+  private mapTargetType(apiType: string): ProductTargetType {
+    const typeMap: Record<string, ProductTargetType> = {
+      'asinsameas': 'asinSameAs',
+      'asinexpandedfrom': 'asinExpandedFrom',
+      'asincategorysameas': 'asinCategorySameAs',
+      'asinbrandsameas': 'asinBrandSameAs',
+      'asinpricelessthan': 'asinPriceLessThan',
+      'asinpricebetween': 'asinPriceBetween',
+      'asinpricegreaterthan': 'asinPriceGreaterThan',
+      'asinreviewratinglessthan': 'asinReviewRatingLessThan',
+      'asinreviewratingbetween': 'asinReviewRatingBetween',
+      'asinreviewratinggreaterthan': 'asinReviewRatingGreaterThan',
+    };
+    return typeMap[apiType.toLowerCase()] || 'asinSameAs';
+  }
+
+  /**
+   * Parse refinements from targeting expression (for category targets)
+   */
+  private parseRefinements(expressions: Array<{ type: string; value?: string }>): CategoryTarget['refinements'] | undefined {
+    if (expressions.length <= 1) return undefined;
+
+    const refinements: CategoryTarget['refinements'] = {};
+
+    for (const expr of expressions.slice(1)) {
+      const type = expr.type.toLowerCase();
+      if (type === 'asinbrandsameas' && expr.value) {
+        refinements.brands = refinements.brands || [];
+        refinements.brands.push(expr.value);
+      }
+      // Add more refinement parsing as needed
+    }
+
+    return Object.keys(refinements).length > 0 ? refinements : undefined;
+  }
+
+  /**
+   * Update product/category target bid
+   */
+  async updateTargetBid(targetId: string, newBid: number): Promise<{ success: boolean; targetId: string }> {
+    const response = await this.request<{ targetingClauses: Array<{ targetId: string; index: number; code: string }> }>(
+      '/sp/targets',
+      {
+        method: 'PUT',
+        body: JSON.stringify({
+          targetingClauses: [
+            {
+              targetId,
+              bid: newBid,
+            },
+          ],
+        }),
+      },
+      CONTENT_TYPES.targeting
+    );
+
+    const result = response.targetingClauses[0];
+    if (result.code !== 'SUCCESS') {
+      throw new Error(`Failed to update target bid: ${result.code}`);
+    }
+
+    return { success: true, targetId };
+  }
+
+  /**
+   * Update product/category target state (enable, pause, archive)
+   */
+  async updateTargetState(
+    targetId: string,
+    state: 'enabled' | 'paused' | 'archived'
+  ): Promise<{ success: boolean; targetId: string }> {
+    const response = await this.request<{ targetingClauses: Array<{ targetId: string; index: number; code: string }> }>(
+      '/sp/targets',
+      {
+        method: 'PUT',
+        body: JSON.stringify({
+          targetingClauses: [
+            {
+              targetId,
+              state: state.toUpperCase(),
+            },
+          ],
+        }),
+      },
+      CONTENT_TYPES.targeting
+    );
+
+    const result = response.targetingClauses[0];
+    if (result.code !== 'SUCCESS') {
+      throw new Error(`Failed to update target state: ${result.code}`);
+    }
+
+    return { success: true, targetId };
   }
 
   // ============================================
