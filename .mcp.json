@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "kdp-ads": {
+      "command": "node",
+      "args": ["dist/mcp/mcp-server.js"],
+      "env": {
+        "DATABASE_URL": "postgresql://kdp:kdp_secret@localhost:5432/kdp_ads",
+        "BOOK_ROYALTY_AMOUNT": "2.80",
+        "KENP_RATE_PER_PAGE": "0.0045"
+      }
+    }
+  }
+}

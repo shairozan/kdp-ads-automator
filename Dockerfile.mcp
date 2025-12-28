@@ -1,0 +1,17 @@
+# MCP Server Dockerfile
+FROM node:20-slim
+
+WORKDIR /app
+
+# Install dependencies first (for layer caching)
+COPY package*.json ./
+RUN npm ci --only=production
+
+# Copy built files
+COPY dist/ ./dist/
+
+# The MCP server runs on stdio
+ENV NODE_ENV=production
+
+# Run the MCP server
+CMD ["node", "dist/mcp/mcp-server.js"]

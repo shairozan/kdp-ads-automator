@@ -1,0 +1,19 @@
+# Sync Worker Dockerfile
+FROM node:20-slim
+
+WORKDIR /app
+
+# Install dependencies first (for layer caching)
+COPY package*.json ./
+RUN npm ci --only=production
+
+# Copy built files
+COPY dist/ ./dist/
+
+# Default configuration
+ENV NODE_ENV=production
+ENV SYNC_INTERVAL_MINUTES=60
+ENV METRICS_LOOKBACK_DAYS=14
+
+# Run the sync worker
+CMD ["node", "dist/worker/sync-worker.js"]
