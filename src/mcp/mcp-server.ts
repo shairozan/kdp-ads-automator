@@ -30,6 +30,9 @@
 
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+import express, { Request, Response } from 'express';
+import { randomUUID } from 'node:crypto';
 import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
@@ -474,6 +477,16 @@ const writeTools = [
         },
       },
       required: ['change_id'],
+    },
+  },
+  {
+    name: 'approve_all_pending',
+    description:
+      'Approve and execute all pending bid changes in a single batch API call. This is more efficient than approving changes one by one and avoids rate limiting.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {},
+      required: [],
     },
   },
 ];
@@ -1282,6 +1295,121 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         };
       }
 
+      case 'approve_all_pending': {
+        // Get all pending changes
+        const pendingChanges = await db.getPendingChanges('pending');
+
+        if (pendingChanges.length === 0) {
+          return {
+            content: [{ type: 'text' as const, text: 'No pending changes to approve.' }],
+          };
+        }
+
+        if (!adsClient) {
+          return {
+            content: [
+              {
+                type: 'text' as const,
+                text:
+                  `⚠️ Amazon Advertising API is not configured.\n\n` +
+                  `${pendingChanges.length} pending changes cannot be executed automatically.`,
+              },
+            ],
+            isError: true,
+          };
+        }
+
+        // Group changes by type for batch processing
+        const bidChanges = pendingChanges.filter(
+          (c) => c.changeType === 'bid_adjustment' && (c.targetType === 'product_target' || c.targetType === 'category_target')
+        );
+
+        const results: string[] = [];
+        let successCount = 0;
+        let errorCount = 0;
+
+        // Batch process target bid changes
+        if (bidChanges.length > 0) {
+          const updates = bidChanges.map((c) => ({
+            targetId: c.targetId,
+            bid: (c.proposedValue as { bid: number }).bid,
+          }));
+
+          try {
+            const batchResult = await adsClient.updateTargetBids(updates);
+
+            // Process successes
+            for (const success of batchResult.successes) {
+              const change = bidChanges.find((c) => c.targetId === success.targetId);
+              if (change) {
+                await db.updatePendingChangeStatus(change.id, 'executed');
+                await db.recordChangeHistory(
+                  change.id,
+                  change.targetType,
+                  change.targetId,
+                  change.changeType,
+                  change.currentValue,
+                  change.proposedValue,
+                  true
+                );
+                results.push(`✅ ${change.targetName || change.targetId}: bid updated`);
+                successCount++;
+              }
+            }
+
+            // Process errors
+            for (const error of batchResult.errors) {
+              const change = bidChanges.find((c) => c.targetId === error.targetId);
+              if (change) {
+                const errorMsg = `${error.code}${error.details ? ` - ${error.details}` : ''}`;
+                await db.updatePendingChangeStatus(change.id, 'failed', errorMsg);
+                await db.recordChangeHistory(
+                  change.id,
+                  change.targetType,
+                  change.targetId,
+                  change.changeType,
+                  change.currentValue,
+                  change.proposedValue,
+                  false,
+                  { error: errorMsg }
+                );
+                results.push(`❌ ${change.targetName || change.targetId}: ${errorMsg}`);
+                errorCount++;
+              }
+            }
+          } catch (error) {
+            const errorMsg = error instanceof Error ? error.message : 'Unknown error';
+            results.push(`❌ Batch update failed: ${errorMsg}`);
+            // Mark all as failed
+            for (const change of bidChanges) {
+              await db.updatePendingChangeStatus(change.id, 'failed', errorMsg);
+              errorCount++;
+            }
+          }
+        }
+
+        // Handle other change types individually (keyword bids, state changes, etc.)
+        const otherChanges = pendingChanges.filter(
+          (c) => !bidChanges.includes(c)
+        );
+        if (otherChanges.length > 0) {
+          results.push(`\n⚠️ ${otherChanges.length} other change(s) not processed (use approve_change for non-target-bid changes)`);
+        }
+
+        return {
+          content: [
+            {
+              type: 'text' as const,
+              text:
+                `Batch approval complete:\n\n` +
+                `✅ Succeeded: ${successCount}\n` +
+                `❌ Failed: ${errorCount}\n\n` +
+                `Details:\n${results.join('\n')}`,
+            },
+          ],
+        };
+      }
+
       default:
         throw new Error(`Unknown tool: ${name}`);
     }
@@ -1397,15 +1525,111 @@ server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
 // Start Server
 // ============================================
 
-async function main() {
-  // Run migrations on startup
-  await db.migrate();
+const MCP_PORT = parseInt(process.env.MCP_PORT || '3100', 10);
+const MCP_MODE = process.env.MCP_MODE || 'http'; // 'http' or 'stdio'
 
+async function startHttpServer() {
+  const app = express();
+  app.use(express.json());
 
+  // Request logging middleware
+  app.use((req: Request, _res: Response, next) => {
+    console.error(`[${new Date().toISOString()}] ${req.method} ${req.path}`);
+    console.error(`  Headers: ${JSON.stringify(req.headers)}`);
+    if (req.body && Object.keys(req.body).length > 0) {
+      console.error(`  Body: ${JSON.stringify(req.body)}`);
+    }
+    next();
+  });
+
+  // Store active transports by session ID
+  const transports: Map<string, StreamableHTTPServerTransport> = new Map();
+
+  // Health check endpoint
+  app.get('/health', (_req: Request, res: Response) => {
+    res.json({ status: 'ok', mode: 'http', port: MCP_PORT });
+  });
+
+  // MCP endpoint - handles POST for requests, GET for SSE streams, DELETE for cleanup
+  app.post('/mcp', async (req: Request, res: Response) => {
+    const sessionId = req.headers['mcp-session-id'] as string | undefined;
+
+    let transport: StreamableHTTPServerTransport;
+
+    if (sessionId && transports.has(sessionId)) {
+      transport = transports.get(sessionId)!;
+    } else {
+      // Create new transport for new session
+      transport = new StreamableHTTPServerTransport({
+        sessionIdGenerator: () => randomUUID(),
+      });
+
+      // Connect server to this transport
+      await server.connect(transport);
+
+      // Store transport when we get a session ID
+      transport.onclose = () => {
+        const sid = (transport as unknown as { sessionId?: string }).sessionId;
+        if (sid) {
+          transports.delete(sid);
+        }
+      };
+    }
+
+    await transport.handleRequest(req, res, req.body);
+
+    // Store transport with session ID after handling request
+    const newSessionId = res.getHeader('mcp-session-id') as string | undefined;
+    if (newSessionId && !transports.has(newSessionId)) {
+      transports.set(newSessionId, transport);
+    }
+  });
+
+  // GET for SSE streaming
+  app.get('/mcp', async (req: Request, res: Response) => {
+    const sessionId = req.headers['mcp-session-id'] as string;
+    if (!sessionId || !transports.has(sessionId)) {
+      res.status(400).json({ error: 'Invalid or missing session ID' });
+      return;
+    }
+
+    const transport = transports.get(sessionId)!;
+    await transport.handleRequest(req, res);
+  });
+
+  // DELETE for session cleanup
+  app.delete('/mcp', async (req: Request, res: Response) => {
+    const sessionId = req.headers['mcp-session-id'] as string;
+    if (sessionId && transports.has(sessionId)) {
+      const transport = transports.get(sessionId)!;
+      await transport.close();
+      transports.delete(sessionId);
+    }
+    res.status(204).send();
+  });
+
+  app.listen(MCP_PORT, '0.0.0.0', () => {
+    console.error(`KDP Ad Automator MCP server v2.0.0 running on http://0.0.0.0:${MCP_PORT}/mcp`);
+    console.error(`API client: ${adsClient ? 'configured' : 'not configured (changes will be recorded but not executed)'}`);
+  });
+}
+
+async function startStdioServer() {
   const transport = new StdioServerTransport();
   await server.connect(transport);
   console.error('KDP Ad Automator MCP server v2.0.0 running on stdio');
   console.error(`API client: ${adsClient ? 'configured' : 'not configured (changes will be recorded but not executed)'}`);
+}
+
+async function main() {
+  // Run migrations on startup
+  await db.migrate();
+
+  if (MCP_MODE === 'http') {
+    await startHttpServer();
+  } else {
+    await startStdioServer();
+  }
 }
 
 main().catch(console.error);

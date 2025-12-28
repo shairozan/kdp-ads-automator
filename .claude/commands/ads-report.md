@@ -17,16 +17,32 @@ Use the MCP tools to gather data and create a markdown report with the following
    - Spend, Sales, ACOS
    - Orders, Units Sold
 
-3. **ROI Analysis**: Use the analyze_roi tool to show:
+3. **Targeting Details**: Use get_all_targets or get_product_targets/get_category_targets to show:
+
+   **Product Targets (ASIN Targeting)**:
+   - Target ASIN, Target Type (asinSameAs, asinExpandedFrom, etc.)
+   - Current Bid, State (enabled/paused)
+   - Group by campaign for clarity
+
+   **Category Targets**:
+   - Category Name/ID
+   - Current Bid, State
+   - Any refinements (brands, price ranges, review ratings)
+   - Group by campaign for clarity
+
+4. **ROI Analysis**: Use the analyze_roi tool to show:
    - Overall ACOS vs break-even ACOS
    - ROAS
    - Estimated profit/loss
    - Profitability status
 
-4. **Daily Trend (Last 7 Days)**: Use get_daily_breakdown to show a table of daily performance with:
+5. **Daily Trend (Last 7 Days)**: Use get_daily_breakdown to show a table of daily performance with:
    - Date, Impressions, Clicks, Spend, Sales, ACOS
 
-5. **Recommendations**: Based on the data, provide 2-3 actionable recommendations
+6. **Recommendations**: Based on the data, provide 2-3 actionable recommendations for:
+   - Target bid adjustments (increase bids on high-performing ASINs/categories, decrease on poor performers)
+   - Targets to pause or enable
+   - Budget allocation changes
 
 ## Output Format
 

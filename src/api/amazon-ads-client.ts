@@ -410,28 +410,43 @@ export class AmazonAdsClient {
    * Update product/category target bid
    */
   async updateTargetBid(targetId: string, newBid: number): Promise<{ success: boolean; targetId: string }> {
-    const response = await this.request<{ targetingClauses: Array<{ targetId: string; index: number; code: string }> }>(
+    const results = await this.updateTargetBids([{ targetId, bid: newBid }]);
+    if (results.errors.length > 0) {
+      throw new Error(`Failed to update target bid: ${results.errors[0].code}${results.errors[0].details ? ` - ${results.errors[0].details}` : ''}`);
+    }
+    if (results.successes.length > 0) {
+      return { success: true, targetId };
+    }
+    throw new Error(`Failed to update target bid: no response`);
+  }
+
+  /**
+   * Batch update multiple target bids in a single API call
+   */
+  async updateTargetBids(updates: Array<{ targetId: string; bid: number }>): Promise<{
+    successes: Array<{ targetId: string; index: number }>;
+    errors: Array<{ targetId: string; index: number; code: string; details?: string }>;
+  }> {
+    const response = await this.request<{
+      targetingClauses?: {
+        success?: Array<{ targetId: string; index: number }>;
+        error?: Array<{ targetId: string; index: number; code: string; details?: string }>;
+      };
+    }>(
       '/sp/targets',
       {
         method: 'PUT',
         body: JSON.stringify({
-          targetingClauses: [
-            {
-              targetId,
-              bid: newBid,
-            },
-          ],
+          targetingClauses: updates.map(({ targetId, bid }) => ({ targetId, bid })),
         }),
       },
       CONTENT_TYPES.targeting
     );
 
-    const result = response.targetingClauses[0];
-    if (result.code !== 'SUCCESS') {
-      throw new Error(`Failed to update target bid: ${result.code}`);
-    }
-
-    return { success: true, targetId };
+    return {
+      successes: response.targetingClauses?.success || [],
+      errors: response.targetingClauses?.error || [],
+    };
   }
 
   /**
@@ -441,7 +456,12 @@ export class AmazonAdsClient {
     targetId: string,
     state: 'enabled' | 'paused' | 'archived'
   ): Promise<{ success: boolean; targetId: string }> {
-    const response = await this.request<{ targetingClauses: Array<{ targetId: string; index: number; code: string }> }>(
+    const response = await this.request<{
+      targetingClauses?: {
+        success?: Array<{ targetId: string; index: number }>;
+        error?: Array<{ targetId: string; index: number; code: string; details?: string }>;
+      };
+    }>(
       '/sp/targets',
       {
         method: 'PUT',
@@ -457,12 +477,19 @@ export class AmazonAdsClient {
       CONTENT_TYPES.targeting
     );
 
-    const result = response.targetingClauses[0];
-    if (result.code !== 'SUCCESS') {
-      throw new Error(`Failed to update target state: ${result.code}`);
+    // Check for errors in the response
+    if (response.targetingClauses?.error && response.targetingClauses.error.length > 0) {
+      const error = response.targetingClauses.error[0];
+      throw new Error(`Failed to update target state: ${error.code}${error.details ? ` - ${error.details}` : ''}`);
     }
 
-    return { success: true, targetId };
+    // Check for success
+    if (response.targetingClauses?.success && response.targetingClauses.success.length > 0) {
+      return { success: true, targetId };
+    }
+
+    // Handle unexpected response formats
+    throw new Error(`Failed to update target state: unexpected API response format - ${JSON.stringify(response)}`);
   }
 
   // ============================================

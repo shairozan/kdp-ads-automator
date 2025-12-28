@@ -34,9 +34,7 @@ services:
     command: ["node", "dist/db/migrate.js"]
     restart: "no"
 
-  # MCP Server
-  # Note: MCP servers communicate via stdio, so this container is used
-  # as a base for Claude Desktop to spawn. See README for configuration.
+  # MCP Server (HTTP mode)
   mcp-server:
     build:
       context: .
@@ -49,14 +47,15 @@ services:
       DATABASE_URL: postgresql://kdp:${POSTGRES_PASSWORD:-kdp_secret}@postgres:5432/kdp_ads
       BOOK_ROYALTY_AMOUNT: ${BOOK_ROYALTY_AMOUNT:-2.80}
       KENP_RATE_PER_PAGE: ${KENP_RATE_PER_PAGE:-0.0045}
+      MCP_MODE: http
+      MCP_PORT: 3100
       # Amazon API credentials (optional - enables auto-execution of changes)
       AMAZON_CLIENT_ID: ${AMAZON_CLIENT_ID:-}
       AMAZON_CLIENT_SECRET: ${AMAZON_CLIENT_SECRET:-}
       AMAZON_REFRESH_TOKEN: ${AMAZON_REFRESH_TOKEN:-}
       AMAZON_PROFILE_ID: ${AMAZON_PROFILE_ID:-}
-    # MCP uses stdio, so we keep stdin open
-    stdin_open: true
-    tty: true
+    ports:
+      - "3100:3100"
     restart: unless-stopped
 
   # Sync Worker (periodically fetches data from Amazon API)

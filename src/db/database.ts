@@ -44,6 +44,38 @@ export class KdpDatabase {
    */
   async migrate(): Promise<void> {
     await this.pool.query(SCHEMA);
+
+    // Apply constraint migrations for existing databases
+    await this.applyConstraintMigrations();
+  }
+
+  /**
+   * Apply constraint migrations that may be missing from existing databases
+   */
+  private async applyConstraintMigrations(): Promise<void> {
+    // Check if pending_changes target_type constraint needs updating
+    const result = await this.pool.query(`
+      SELECT pg_get_constraintdef(oid) as definition
+      FROM pg_constraint
+      WHERE conname = 'pending_changes_target_type_check'
+    `);
+
+    if (result.rows.length > 0) {
+      const currentConstraint = result.rows[0].definition;
+      // Check if product_target is missing from the constraint
+      if (!currentConstraint.includes('product_target')) {
+        console.log('Updating pending_changes target_type constraint to include product_target and category_target...');
+        await this.pool.query(`
+          ALTER TABLE pending_changes
+          DROP CONSTRAINT pending_changes_target_type_check;
+
+          ALTER TABLE pending_changes
+          ADD CONSTRAINT pending_changes_target_type_check
+          CHECK (target_type IN ('campaign', 'ad_group', 'keyword', 'product_target', 'category_target'));
+        `);
+        console.log('Constraint updated successfully.');
+      }
+    }
   }
 
 
