@@ -1,5 +1,11 @@
 # KDP Ad Automator
 
+- What it solves (Amazon ads are opaque, manual optimization is tedious)
+- Architecture (sync service → MCP server → Claude skill)
+- Setup (API credentials, installation, configuration)
+- Usage examples (actual Claude conversations showing optimization suggestions)
+- Example output (before/after campaign performance)
+
 An MCP server for analyzing and managing Amazon KDP advertising campaigns with ROI tracking, profitability analysis, and natural language control.
 
 ## Features
@@ -54,8 +60,8 @@ Add to your Claude Desktop config:
 {
   "mcpServers": {
     "kdp-ads": {
-      "command": "docker",
-      "args": ["exec", "-i", "kdp-mcp-server", "node", "dist/mcp/mcp-server.js"]
+      "type": "http",
+      "url": "http://localhost:3100/mcp"
     }
   }
 }
@@ -95,12 +101,8 @@ DATABASE_URL=postgresql://localhost/kdp_ads npm run db:migrate -- --demo
 {
   "mcpServers": {
     "kdp-ads": {
-      "command": "node",
-      "args": ["/path/to/ad-automator/dist/mcp/mcp-server.js"],
-      "env": {
-        "DATABASE_URL": "postgresql://localhost/kdp_ads",
-        "BOOK_ROYALTY_AMOUNT": "2.80"
-      }
+      "type": "http",
+      "url": "http://localhost:3100/mcp"
     }
   }
 }
