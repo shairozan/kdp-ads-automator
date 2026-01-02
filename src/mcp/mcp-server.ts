@@ -32,6 +32,7 @@ import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import express, { Request, Response } from 'express';
+import cors from 'cors';
 import { randomUUID } from 'node:crypto';
 import {
   CallToolRequestSchema,
@@ -1530,6 +1531,16 @@ const MCP_MODE = process.env.MCP_MODE || 'http'; // 'http' or 'stdio'
 
 async function startHttpServer() {
   const app = express();
+
+  // Enable CORS for Open WebUI and other clients
+  app.use(cors({
+    origin: true, // Allow all origins (or specify ['http://localhost:3000'] for more security)
+    methods: ['GET', 'POST', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'mcp-session-id', 'Authorization'],
+    exposedHeaders: ['mcp-session-id'],
+    credentials: true,
+  }));
+
   app.use(express.json());
 
   // Request logging middleware
